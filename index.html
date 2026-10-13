@@ -65,7 +65,7 @@
   <section>
     <h2>2 · Approve</h2>
     <button id="approve">Approve with Face ID</button>
-    <p class="hint">Approving signs the request above. It authorizes one press, on one release, and expires in 30 minutes.</p>
+    <p class="hint">Approving signs the request above. It authorizes exactly the actions listed, on one release, and expires in 30 minutes.</p>
     <div id="result"></div>
   </section>
 
@@ -96,7 +96,9 @@ function renderSummary() {
   if (!parsed) return show($("summary"), "");
   if (!parsed.payload) return show($("summary"), '<p class="warn">This does not decode as a request. Paste the whole line.</p>');
   const p = parsed.payload;
-  const rows = [["release", p.release], ["action", p.action], ["version", p.version], ["build", p.build],
+  const many = Array.isArray(p.actions);
+  const rows = [["release", p.release], [many ? "actions" : "action", many ? p.actions.join(", ") : p.action],
+                ["version", p.version], ["build", p.build],
                 ["store digest", p.store_configuration_sha256], ["asked at", p.requested_at]]
     .filter(([, value]) => value !== undefined && value !== "")
     .map(([key, value]) => `<dt>${key}</dt><dd>${String(value).replace(/[<&]/g, (c) => c === "<" ? "&lt;" : "&amp;")}</dd>`).join("");
