@@ -1,0 +1,160 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Release grant approval</title>
+<!--
+  Served from an origin the operator controls — GitHub Pages is enough — because
+  a passkey is bound to the site that created it, and because WebAuthn does not
+  work in the cross-origin iframe an Artifact renders in.
+
+  Nothing here talks to a server. The page decodes the request, shows what it
+  binds, asks the passkey to sign those exact bytes, and prints the token. The
+  release Mac verifies it offline with `release-manager accept-grant`.
+-->
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfbfa; --fg: #1a1a18; --muted: #6b6b66; --line: #dedbd4;
+    --accent: #2f5d50; --warn: #8a3b2f; --card: #ffffff;
+  }
+  :root:not([data-theme="light"]) {
+    @media (prefers-color-scheme: dark) {
+      --bg: #16161a; --fg: #ececea; --muted: #9a9a95; --line: #2e2e34;
+      --accent: #7fb3a2; --warn: #e08b7c; --card: #1e1e24;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px 64px; background: var(--bg); color: var(--fg);
+    font: 16px/1.5 ui-sans-serif, -apple-system, system-ui, sans-serif;
+  }
+  main { max-width: 34rem; margin: 0 auto; }
+  h1 { font-size: 1.25rem; margin: 0 0 4px; }
+  p.lede { color: var(--muted); margin: 0 0 24px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  h2 { font-size: .95rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 12px; }
+  textarea, pre {
+    width: 100%; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--bg); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 8px; padding: 10px; word-break: break-all; white-space: pre-wrap;
+  }
+  textarea { min-height: 96px; resize: vertical; }
+  button {
+    font: inherit; font-weight: 600; color: #fff; background: var(--accent);
+    border: 0; border-radius: 999px; padding: 12px 20px; margin-top: 12px; width: 100%;
+  }
+  button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0 0 4px; }
+  dt { color: var(--muted); font-size: .85rem; }
+  dd { margin: 0; font-family: ui-monospace, Menlo, monospace; font-size: .85rem; word-break: break-all; }
+  .warn { color: var(--warn); }
+  .hint { color: var(--muted); font-size: .85rem; margin: 10px 0 0; }
+  details { margin-top: 20px; }
+  summary { color: var(--muted); font-size: .9rem; }
+</style>
+<main>
+  <h1>Release grant approval</h1>
+  <p class="lede">Read what the request binds, then approve it with Face ID. The signature covers these exact bytes and nothing else.</p>
+
+  <section>
+    <h2>1 · The request</h2>
+    <textarea id="request" placeholder="Paste the request the release machine printed" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
+    <div id="summary"></div>
+  </section>
+
+  <section>
+    <h2>2 · Approve</h2>
+    <button id="approve">Approve with Face ID</button>
+    <p class="hint">Approving signs the request above. It authorizes one press, on one release, and expires in 30 minutes.</p>
+    <div id="result"></div>
+  </section>
+
+  <details>
+    <summary>Register this device once</summary>
+    <p class="hint">Creates the passkey and prints the public half to commit into <code>fleet/operator-keys.json</code>. Do this once per device; nothing secret leaves the phone.</p>
+    <button class="secondary" id="register">Create a passkey</button>
+    <div id="registration"></div>
+  </details>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const enc = new TextEncoder();
+const b64u = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const unb64u = (text) => Uint8Array.from(atob(text.trim().replace(/-/g, "+").replace(/_/g, "/").padEnd(text.trim().length + (4 - text.trim().length % 4) % 4, "=")), (c) => c.charCodeAt(0));
+
+function parseRequest() {
+  const raw = $("request").value.trim();
+  if (!raw) return null;
+  try { return { raw, payload: JSON.parse(new TextDecoder().decode(unb64u(raw))) }; }
+  catch { return { raw, payload: null }; }
+}
+
+function show(node, html) { node.innerHTML = html; }
+
+function renderSummary() {
+  const parsed = parseRequest();
+  if (!parsed) return show($("summary"), "");
+  if (!parsed.payload) return show($("summary"), '<p class="warn">This does not decode as a request. Paste the whole line.</p>');
+  const p = parsed.payload;
+  const rows = [["release", p.release], ["action", p.action], ["version", p.version], ["build", p.build],
+                ["store digest", p.store_configuration_sha256], ["asked at", p.requested_at]]
+    .filter(([, value]) => value !== undefined && value !== "")
+    .map(([key, value]) => `<dt>${key}</dt><dd>${String(value).replace(/[<&]/g, (c) => c === "<" ? "&lt;" : "&amp;")}</dd>`).join("");
+  show($("summary"), `<dl>${rows}</dl><p class="hint">Approve only if this is the release and the action you expect.</p>`);
+}
+$("request").addEventListener("input", renderSummary);
+
+$("register").addEventListener("click", async () => {
+  try {
+    const credential = await navigator.credentials.create({ publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      rp: { name: "iOS release manager", id: location.hostname },
+      user: { id: crypto.getRandomValues(new Uint8Array(16)), name: "release-operator", displayName: "Release operator" },
+      pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+      authenticatorSelection: { userVerification: "required", residentKey: "preferred" },
+      attestation: "none",
+    }});
+    // The public key is read from the credential itself, so nothing has to parse
+    // attestation CBOR here: getPublicKey() returns SPKI DER, whose last 65
+    // bytes are the uncompressed P-256 point.
+    const spki = new Uint8Array(credential.response.getPublicKey());
+    const point = spki.slice(-65);
+    if (point[0] !== 4) throw new Error("unexpected key format; expected an uncompressed P-256 point");
+    const block = {
+      rp_id: location.hostname,
+      credentials: { [b64u(credential.rawId)]: {
+        label: "", // name the device here, e.g. "iPhone"
+        public_key: { x: b64u(point.slice(1, 33)), y: b64u(point.slice(33, 65)) },
+      }},
+    };
+    show($("registration"), `<p class="hint">Commit this into <code>fleet/operator-keys.json</code>, filling in the label:</p><pre>${JSON.stringify(block, null, 2)}</pre>`);
+  } catch (error) {
+    show($("registration"), `<p class="warn">${error.message || error}</p>`);
+  }
+});
+
+$("approve").addEventListener("click", async () => {
+  const parsed = parseRequest();
+  if (!parsed || !parsed.payload) return show($("result"), '<p class="warn">Paste a request first.</p>');
+  try {
+    const challenge = await crypto.subtle.digest("SHA-256", enc.encode(parsed.raw));
+    const assertion = await navigator.credentials.get({ publicKey: {
+      challenge: new Uint8Array(challenge),
+      rpId: location.hostname,
+      userVerification: "required",
+      timeout: 120000,
+    }});
+    const token = b64u(enc.encode(JSON.stringify({
+      request: parsed.raw,
+      credential_id: b64u(assertion.rawId),
+      authenticator_data: b64u(assertion.response.authenticatorData),
+      client_data: b64u(assertion.response.clientDataJSON),
+      signature: b64u(assertion.response.signature),
+    })));
+    show($("result"), `<p class="hint">Send this token back to the task:</p><pre id="token">${token}</pre><button class="secondary" id="copy">Copy token</button>`);
+    $("copy").addEventListener("click", () => navigator.clipboard.writeText(token));
+  } catch (error) {
+    show($("result"), `<p class="warn">${error.message || error}</p>`);
+  }
+});
+</script>
